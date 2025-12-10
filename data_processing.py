@@ -1,5 +1,3 @@
-
-
 import csv
 import unicodedata
 import requests
@@ -19,8 +17,20 @@ def normalize_text(text: str) -> str:
     if not isinstance(text, str):
         text = str(text) if text is not None else ""
     text = unicodedata.normalize("NFKD", text)
-    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = "".join(c for c in unicodedata.combining(c))
     return " ".join(text.lower().strip().split())
+
+
+def normalize_province(name: str) -> str:
+    """
+    Normaliza la provincia eliminando tildes, espacios extra y mayúsculas.
+    Convierte "Los Ríos" → "LOS RIOS"
+    """
+    if not isinstance(name, str):
+        name = str(name)
+    name = unicodedata.normalize("NFKD", name)
+    name = name.encode("ascii", "ignore").decode("utf-8")
+    return name.strip().upper()
 
 
 # ============================================================
@@ -30,7 +40,6 @@ def normalize_text(text: str) -> str:
 def detectar_separador(uploaded_file) -> str:
     """
     Detecta separador probable usando csv.Sniffer.
-    Fallback a ';' que es muy típico en SRI.
     """
     raw = uploaded_file
     raw.seek(0)
@@ -80,18 +89,22 @@ def load_and_clean_data(uploaded_file) -> pd.DataFrame:
 
 
 # ============================================================
-# FILTRO POR PROVINCIA
+# FILTRO POR PROVINCIA — (CORREGIDO COMPLETAMENTE)
 # ============================================================
 
 def filter_by_province(df: pd.DataFrame, provincia: str) -> pd.DataFrame:
     """
-    Usa la columna real del SRI: DESCRIPCION_PROVINCIA_EST.
+    Filtra por DESCRIPCION_PROVINCIA_EST
+    con normalización completa (sin tildes y mayúsculas).
     """
-    provincia = provincia.strip().upper()
-    if "DESCRIPCION_PROVINCIA_EST" not in df.columns:
-        return df.copy()
+    provincia_norm = normalize_province(provincia)
 
-    mask = df["DESCRIPCION_PROVINCIA_EST"].astype(str).str.upper() == provincia
+    if "DESCRIPCION_PROVINCIA_EST" not in df.columns:
+        return pd.DataFrame()
+
+    df["prov_norm"] = df["DESCRIPCION_PROVINCIA_EST"].apply(normalize_province)
+
+    mask = df["prov_norm"] == provincia_norm
     return df.loc[mask].copy()
 
 
@@ -120,15 +133,9 @@ KEYWORDS_LIBRERIAS = [
 
 
 def detect_libraries(df_provincia: pd.DataFrame) -> pd.DataFrame:
-    """
-    Detecta librerías combinando:
-    - Códigos CIIU relevantes
-    - Palabras clave en NOMBRE_FANTASIA_COMERCIAL
-    - Estado ACTIVO si la columna existe
-    """
     df = df_provincia.copy()
 
-    # 1) Intentar por CIIU
+    # 1) Detectar columna CIIU
     col_ciiu = None
     for c in df.columns:
         if "ciiu" in c.lower():
@@ -143,7 +150,7 @@ def detect_libraries(df_provincia: pd.DataFrame) -> pd.DataFrame:
             lambda v: any(code in v for code in CIIU_CODIGOS_LIBRERIAS.keys())
         )
 
-    # 2) Intentar por nombre comercial
+    # 2) Palabras clave
     if "NOMBRE_FANTASIA_COMERCIAL" in df.columns:
         nombres = df["NOMBRE_FANTASIA_COMERCIAL"].fillna("").astype(str)
         mask_nombre = nombres.apply(
@@ -152,40 +159,36 @@ def detect_libraries(df_provincia: pd.DataFrame) -> pd.DataFrame:
     else:
         mask_nombre = pd.Series([False] * len(df), index=df.index)
 
-    # 3) Unir
-    mask_total = mask_ciiu | mask_nombre
-    df_lib = df[mask_total].copy()
+    df_lib = df[mask_ciiu | mask_nombre].copy()
 
-    # 4) Filtrar activos
+    # 3) Estado ACTIVO
     if "ESTADO_CONTRIBUYENTE" in df_lib.columns:
         df_lib["ESTADO_CONTRIBUYENTE"] = (
             df_lib["ESTADO_CONTRIBUYENTE"].astype(str).str.upper().str.strip()
         )
         df_lib = df_lib[df_lib["ESTADO_CONTRIBUYENTE"] == "ACTIVO"].copy()
 
-    # 5) Asegurar que NOMBRE_FANTASIA_COMERCIAL esté limpio
+    # 4) Limpieza del nombre comercial
     if "NOMBRE_FANTASIA_COMERCIAL" in df_lib.columns:
-        df_lib["NOMBRE_FANTASIA_COMERCIAL"] = (
-            df_lib["NOMBRE_FANTASIA_COMERCIAL"].fillna("").astype(str).str.strip()
-        )
+        df_lib["NOMBRE_FANTASIA_COMERCIAL"] = df_lib[
+            "NOMBRE_FANTASIA_COMERCIAL"
+        ].fillna("").astype(str).str.strip()
 
     return df_lib
 
 
 # ============================================================
-# GEOAPIFY – GEOCODIFICACIÓN POR NOMBRE COMERCIAL
+# GEOAPIFY – GEOCODIFICACIÓN
 # ============================================================
 
 GEOAPIFY_URL = "https://api.geoapify.com/v1/geocode/search"
 
 def geocode_one(name: str, provincia: str, api_key: str) -> Optional[Dict[str, Any]]:
-    """
-    Geocodifica una librería usando el nombre comercial + provincia + Ecuador.
-    """
     if not api_key or not name:
         return None
 
-    q = f"{name}, {provincia}, Ecuador"
+    provincia_norm = normalize_province(provincia)
+    q = f"{name}, {provincia_norm}, Ecuador"
 
     params = {
         "text": q,
@@ -206,17 +209,14 @@ def geocode_one(name: str, provincia: str, api_key: str) -> Optional[Dict[str, A
 
     p = data[0]
 
-    # Respetar país
     if p.get("country") and "ecuador" not in str(p["country"]).lower():
         return None
 
-    # State opcional
-    state = p.get("state") or ""
     return {
         "nombre_comercial": name,
         "lat": p.get("lat"),
         "lon": p.get("lon"),
-        "provincia_geo": state,
+        "provincia_geo": p.get("state", ""),
         "raw": p,
     }
 
@@ -233,28 +233,26 @@ def geocode_libraries(
 
     df = df_librerias.copy().head(max_registros)
 
+    provincia_norm = normalize_province(provincia_filtro) if provincia_filtro else None
     rows = []
 
     for _, row in df.iterrows():
         nombre = str(row.get("NOMBRE_FANTASIA_COMERCIAL", "")).strip()
-        prov = str(row.get("DESCRIPCION_PROVINCIA_EST", "")).strip()
+        prov_raw = str(row.get("DESCRIPCION_PROVINCIA_EST", "")).strip()
+        prov_final = normalize_province(prov_raw or provincia_filtro)
 
-        if not prov and provincia_filtro:
-            prov = provincia_filtro
-
-        info = geocode_one(nombre, prov, geoapify_key)
+        info = geocode_one(nombre, prov_final, geoapify_key)
         if not info:
             continue
 
-        # Si hay filtro de provincia, validar
-        if provincia_filtro and info["provincia_geo"]:
-            if provincia_filtro.lower() not in info["provincia_geo"].lower():
+        if provincia_norm and info["provincia_geo"]:
+            if provincia_norm not in normalize_province(info["provincia_geo"]):
                 continue
 
         rows.append(
             {
                 "NOMBRE_FANTASIA_COMERCIAL": nombre,
-                "provincia": prov,
+                "provincia": prov_final,
                 "provincia_geo": info.get("provincia_geo", ""),
                 "canton": row.get("DESCRIPCION_CANTON_EST", ""),
                 "parroquia": row.get("DESCRIPCION_PARROQUIA_EST", ""),
@@ -263,7 +261,6 @@ def geocode_libraries(
             }
         )
 
-        # Pequeña espera para no saturar
         time.sleep(0.3)
 
     if not rows:
@@ -277,11 +274,6 @@ def geocode_libraries(
 # ============================================================
 
 def get_library_statistics(df_provincia, df_librerias, df_geo):
-    """
-    - Total registros de la provincia
-    - Total librerías detectadas
-    - Parroquia con más librerías (según datos del SRI, no del mapa)
-    """
     total_registros = len(df_provincia)
     total_librerias = len(df_librerias)
 
@@ -308,7 +300,7 @@ def get_library_statistics(df_provincia, df_librerias, df_geo):
 
 
 # ============================================================
-# SCRAPING GOOGLE + CATALOGO (SIN OTRAS API KEYS)
+# SCRAPING GOOGLE + CATALOGO
 # ============================================================
 
 SCRAPE_HEADERS = {
@@ -317,10 +309,6 @@ SCRAPE_HEADERS = {
 
 
 def google_search_first_result(query: str) -> Optional[str]:
-    """
-    Búsqueda directa en Google sin ScrapingDog.
-    Devuelve el primer enlace orgánico que no sea de Google.
-    """
     from urllib.parse import quote_plus
 
     q = quote_plus(query)
@@ -348,10 +336,6 @@ def google_search_first_result(query: str) -> Optional[str]:
 
 
 def extraer_catalogo_web(url: str) -> List[str]:
-    """
-    Extrae posibles títulos de libros de una página de librería.
-    No es perfecto, pero se basa en selectores típicos de catálogos.
-    """
     try:
         r = requests.get(url, headers=SCRAPE_HEADERS, timeout=15)
         r.raise_for_status()
@@ -379,7 +363,6 @@ def extraer_catalogo_web(url: str) -> List[str]:
             if 3 < len(t) < 120:
                 items.append(t)
 
-    # Títulos que parecen ser libros por contexto
     PALABRAS_LIBROS = [
         "libro",
         "novela",
@@ -415,13 +398,6 @@ def build_books_ranking_from_libraries(
     df_librerias: pd.DataFrame,
     max_librerias: int = 5,
 ):
-    """
-    Construye ranking de libros:
-    1. Intenta extraer desde catálogos de librerías
-    2. Si falla → usa libros más vendidos globales como fallback
-    """
-
-    # -------------- FASE 1: EXTRAER DESDE WEB REAL ----------------
     nombres = (
         df_librerias["NOMBRE_FANTASIA_COMERCIAL"]
         .dropna().astype(str).str.strip().unique().tolist()
@@ -437,13 +413,10 @@ def build_books_ranking_from_libraries(
         titulos.extend(libros)
         time.sleep(2)
 
-    # Si encontramos libros reales → devolverlos
     if titulos:
-        from collections import Counter
         ranking = Counter(titulos).most_common(15)
         return ranking, ranking[0][0]
 
-    # -------------- FASE 2: FALLBACK — BESTSELLERS 2024 --------------
     fallback = [
         "Hábitos Atómicos",
         "El Sutil Arte de que Todo te Importe una Mierda",
@@ -458,5 +431,4 @@ def build_books_ranking_from_libraries(
     ]
 
     ranking = [(titulo, 1) for titulo in fallback]
-    best = fallback[0]
-    return ranking, best
+    return ranking, fallback[0]

@@ -82,21 +82,21 @@ Las API Keys se pueden configurar de dos formas:
 
 **En macOS/Linux:**
 ```bash
-export GEOAPIFY_API_KEY="tu_clave_aqui"
+export GEOAPIFY_KEY="tu_clave_aqui"
 export GROQ_API_KEY="tu_clave_aqui"
 streamlit run main.py
 ```
 
 **En Windows (PowerShell):**
 ```powershell
-$env:GEOAPIFY_API_KEY="tu_clave_aqui"
+$env:GEOAPIFY_KEY="tu_clave_aqui"
 $env:GROQ_API_KEY="tu_clave_aqui"
 streamlit run main.py
 ```
 
 **En Windows (CMD):**
 ```cmd
-set GEOAPIFY_API_KEY=tu_clave_aqui
+set GEOAPIFY_KEY=tu_clave_aqui
 set GROQ_API_KEY=tu_clave_aqui
 streamlit run main.py
 ```
