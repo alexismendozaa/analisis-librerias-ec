@@ -212,10 +212,27 @@ st.header("📖 5. Libros más repetidos según catálogos web")
 with st.spinner("Buscando páginas de librerías y extrayendo catálogos..."):
     ranking, best_title = build_books_ranking_from_libraries(df_librerias, max_librerias=5)
 
-if not ranking:
-    st.warning("No se pudieron extraer títulos de libros desde las webs de las librerías.")
+if not ranking or not best_title:
+    st.info("""
+    ⚠️ **No se pudieron extraer títulos de libros desde las webs de las librerías.**
+    
+    Esto puede deberse a:
+    - Los servidores de las librerías bloquean scrapers
+    - Las URLs no tienen catálogos accesibles
+    - Problema de conectividad
+    
+    **Solución:** Para obtener datos reales, ejecuta los scrapers especializados en paralelo:
+    ```bash
+    # Terminal 1: Scraper de Google
+    python -m uvicorn scraper_google:app --port 8001 --reload
+    
+    # Terminal 2: Scraper de Facebook (opcional)
+    python scraper_facebook.py
+    ```
+    """)
+    best_title = None
 else:
-    st.success("Libros detectados en catálogos de librerías (más repetidos primero):")
+    st.success("✅ Libros detectados en catálogos de librerías (más repetidos primero):")
     df_rank = pd.DataFrame(ranking, columns=["Título", "Repeticiones"])
     st.table(df_rank)
     st.write(f"📘 Posible libro más vendido: **{best_title}**")

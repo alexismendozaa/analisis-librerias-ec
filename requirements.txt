@@ -5,3 +5,8 @@ beautifulsoup4
 folium
 branca
 groq
+fastapi
+uvicorn
+selenium
+webdriver-manager
+unidecode
