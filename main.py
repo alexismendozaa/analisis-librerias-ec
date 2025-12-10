@@ -153,10 +153,12 @@ with st.expander("Ver librerías detectadas"):
 st.header("📊 4. Métricas y mapa")
 
 if not geoapify_key:
-    st.warning("Falta GEOAPIFY_KEY (en variable de entorno o sidebar) para geocodificar.")
+    st.warning("⚠️ Falta GEOAPIFY_KEY (en variable de entorno o sidebar) para geocodificar.")
     df_geo = pd.DataFrame()
 else:
     max_geo = st.slider("Máximo de librerías a geocodificar", 5, 200, 50, 5)
+    
+    st.info(f"🔍 Intentando geocodificar hasta {max_geo} librerías de {len(df_librerias)} detectadas...")
 
     with st.spinner("Geocodificando librerías con Geoapify..."):
         df_geo = geocode_libraries(
@@ -166,8 +168,20 @@ else:
             provincia_filtro=provincia_sel,
         )
 
-if df_geo is None:
-    df_geo = pd.DataFrame()
+if df_geo is None or df_geo.empty:
+    if df_geo is None:
+        df_geo = pd.DataFrame()
+    st.warning(f"⚠️ No se pudieron geocodificar librerías para **{provincia_sel}**. Esto puede deberse a:")
+    st.markdown("""
+    - Nombres de librerías muy genéricos o sin dirección
+    - Límite de créditos de Geoapify alcanzado
+    - Problemas de conexión con la API
+    - Librerías fuera del área de búsqueda
+    
+    💡 **Sugerencia**: Intenta con un CSV que tenga direcciones más específicas o verifica tu API key.
+    """)
+else:
+    st.success(f"✅ {len(df_geo)} librerías geocodificadas exitosamente")
 
 stats = get_library_statistics(df_provincia, df_librerias, df_geo)
 
@@ -184,7 +198,8 @@ with st.expander("Conteo de librerías por parroquia"):
 st.subheader(f"🗺️ Mapa de librerías en {provincia_sel}")
 
 if df_geo.empty:
-    st.warning("No se pudieron obtener coordenadas para las librerías.")
+    st.error(f"❌ No hay librerías geocodificadas para la provincia seleccionada (**{provincia_sel}**).")
+    st.info("El análisis continuará sin el mapa geográfico.")
 else:
     html_map = create_map_html(df_geo, provincia_sel)
     st.components.v1.html(html_map, height=600)

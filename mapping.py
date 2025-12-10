@@ -28,9 +28,12 @@ def create_map_html(df_geo, provincia: str) -> str:
     if prov_norm:
         # Priorizar provincia_geo (retornada por Geoapify) para máxima precisión
         if "provincia_geo" in df.columns:
-            df = df[df["provincia_geo"].apply(_norm) == prov_norm].copy()
-        elif "DESCRIPCION_PROVINCIA_EST" in df.columns:
-            df = df[df["DESCRIPCION_PROVINCIA_EST"].apply(_norm) == prov_norm].copy()
+            # Filter: provincia_geo must contain the target province name
+            df = df[df["provincia_geo"].apply(lambda x: prov_norm in _norm(x))].copy()
+        
+        # Additional filter: also check provincia column if exists
+        if "provincia" in df.columns and not df.empty:
+            df = df[df["provincia"].apply(lambda x: prov_norm in _norm(x))].copy()
 
     if df.empty:
         return "<h3>No hay librerías geocodificadas para la provincia seleccionada.</h3>"
